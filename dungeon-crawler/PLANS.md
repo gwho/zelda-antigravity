@@ -84,6 +84,23 @@ case TileType.COIN:
 ### LevelManager note
 `isSolid()` must return `false` for `HEART_PICKUP` and `COIN` — players must be able to walk on them. Confirm these tile types are not in the `isSolid` block list (they won't be unless explicitly added).
 
+### Visual Feedback on Pickup
+Silently updating `player.health` or `score` in memory is mechanically correct but invisible to the player. Reuse the existing `triggerScreenFlash()` mechanism already in `Game.ts` (used for the "enemy blocking door" red flash) to give immediate feedback:
+
+```typescript
+if (tile === TileType.HEART_PICKUP) {
+    this.player.health = Math.min(this.player.health + 1, PLAYER_MAX_HEALTH);
+    this.levelManager.setTile(gx, gy, TileType.FLOOR);
+    this.triggerScreenFlash(); // reuses existing CSS class animation
+} else if (tile === TileType.COIN) {
+    this.score += COIN_SCORE_VALUE;
+    this.levelManager.setTile(gx, gy, TileType.FLOOR);
+    this.triggerScreenFlash();
+}
+```
+
+The current flash is red (styled for the "locked door" penalty). A future enhancement would be to parameterise `triggerScreenFlash(colorClass?: string)` so hearts get a green flash and coins get a gold one — but any flash is meaningfully better than no feedback, and the existing infrastructure costs nothing to reuse.
+
 ---
 
 ## Plan 1C — Boss Enemy
@@ -125,11 +142,11 @@ export class BossEnemy extends Entity {
         super('boss', EntityType.ENEMY_BOSS, x, y, TILE_SIZE * 1.8, TILE_SIZE * 1.8);
     }
 
-    public takeDamage(): void {
+    public override takeDamage(): void {
         this.health -= 1;
     }
 
-    public isAlive(): boolean {
+    public override isAlive(): boolean {
         return this.health > 0;
     }
 
@@ -139,44 +156,88 @@ export class BossEnemy extends Entity {
         const playerGridX = Math.floor(playerX / TILE_SIZE);
         const playerGridY = Math.floor(playerY / TILE_SIZE);
 
-        // Charge only when sharing a row or column (simple line-of-sight)
-        if (myGridX === playerGridX || myGridY === playerGridY) {
-            const dx = playerX - this.x;
-            const dy = playerY - this.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            if (dist > 1) {
-                const nx = dx / dist;
-                const ny = dy / dist;
-                const nextX = this.x + nx * BOSS_SPEED * dt;
-                const nextY = this.y + ny * BOSS_SPEED * dt;
-                const nextGridX = Math.floor(nextX / TILE_SIZE);
-                const nextGridY = Math.floor(nextY / TILE_SIZE);
-                if (!level.isSolid(nextGridX, nextGridY)) {
-                    this.x = nextX;
-                    this.y = nextY;
-                }
+        const sharesRow = myGridY === playerGridY;
+        const sharesCol = myGridX === playerGridX;
+        if (!sharesRow && !sharesCol) return;
+
+        // Walk the shared axis and bail if any tile between boss and player is solid.
+        // This prevents charging through walls when both happen to share a row/column.
+        let losBlocked = false;
+        if (sharesRow) {
+            const minX = Math.min(myGridX, playerGridX);
+            const maxX = Math.max(myGridX, playerGridX);
+            for (let gx = minX + 1; gx < maxX; gx++) {
+                if (level.isSolid(gx, myGridY)) { losBlocked = true; break; }
             }
+        } else {
+            const minY = Math.min(myGridY, playerGridY);
+            const maxY = Math.max(myGridY, playerGridY);
+            for (let gy = minY + 1; gy < maxY; gy++) {
+                if (level.isSolid(myGridX, gy)) { losBlocked = true; break; }
+            }
+        }
+        if (losBlocked) return;
+
+        const dx = playerX - this.x;
+        const dy = playerY - this.y;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist <= 1) return;
+
+        const nx = dx / dist;
+        const ny = dy / dist;
+        const nextX = this.x + nx * BOSS_SPEED * dt;
+        const nextY = this.y + ny * BOSS_SPEED * dt;
+
+        // Check all 4 corners of the boss bounding box — a single top-left check
+        // would allow the boss (1.8 tiles wide) to clip through walls on its right
+        // and bottom edges.
+        const right  = nextX + this.width  - 1;
+        const bottom = nextY + this.height - 1;
+        const blocked =
+            level.isSolid(Math.floor(nextX  / TILE_SIZE), Math.floor(nextY   / TILE_SIZE)) ||
+            level.isSolid(Math.floor(right  / TILE_SIZE), Math.floor(nextY   / TILE_SIZE)) ||
+            level.isSolid(Math.floor(nextX  / TILE_SIZE), Math.floor(bottom  / TILE_SIZE)) ||
+            level.isSolid(Math.floor(right  / TILE_SIZE), Math.floor(bottom  / TILE_SIZE));
+
+        if (!blocked) {
+            this.x = nextX;
+            this.y = nextY;
         }
     }
 }
 ```
 
-#### `src/systems/CombatSystem.ts`
-- Update `processAttacks()` to call `enemy.takeDamage()` via type guard when the enemy supports it
-- Only call the kill callback when `isAlive()` returns `false`
+#### `src/entities/Entity.ts`
+- Add `takeDamage()` and `isAlive()` as no-op / always-true defaults on the base class
 
 ```typescript
-// Inside processAttacks() hit block — replace direct kill with:
-if ('takeDamage' in enemy && typeof (enemy as any).takeDamage === 'function') {
-    (enemy as any).takeDamage();
-    if ('isAlive' in enemy && !(enemy as any).isAlive()) {
-        handleKill(enemy);
-    }
-} else {
-    // Original instant-kill for patrol/wander enemies
+// Inside the Entity base class body:
+public takeDamage(): void {
+    // Default: instant death — subclasses override for multi-hit behaviour
+    this.isActive = false;
+}
+
+public isAlive(): boolean {
+    return this.isActive;
+}
+```
+
+This makes `takeDamage` / `isAlive` part of the public contract of every entity. Patrol and wander enemies gain instant-kill behaviour for free (deactivating themselves on hit). `BossEnemy` overrides both to implement multi-hit health. `CombatSystem` never needs to cast.
+
+#### `src/systems/CombatSystem.ts`
+- Remove all `as any` casts and `in` operator checks
+- Call `enemy.takeDamage()` on every hit — the base class and overrides handle the right behaviour
+- Only call `handleKill` when `!enemy.isAlive()`
+
+```typescript
+// Inside processAttacks() hit block — clean replacement:
+enemy.takeDamage();
+if (!enemy.isAlive()) {
     handleKill(enemy);
 }
 ```
+
+No type guards, no `instanceof`, no `as any`. The polymorphism that TypeScript was designed for does the work.
 
 #### `src/Game.ts`
 - In `loadLevel()`, spawn `BossEnemy` when the `'B'` marker tile is encountered
@@ -262,23 +323,33 @@ export class ChaserEnemy extends Entity {
         const dx = playerGridX - myGridX;
         const dy = playerGridY - myGridY;
 
-        let stepX = 0;
-        let stepY = 0;
+        // Primary axis: the one with greater grid distance.
+        // Secondary axis: the other one, used as a fallback slide.
+        const primaryIsX   = Math.abs(dx) >= Math.abs(dy);
+        const primaryStepX = primaryIsX   ? Math.sign(dx) : 0;
+        const primaryStepY = primaryIsX   ? 0 : Math.sign(dy);
+        const slideStepX   = primaryIsX   ? 0 : Math.sign(dx);
+        const slideStepY   = primaryIsX   ? Math.sign(dy) : 0;
 
-        if (Math.abs(dx) >= Math.abs(dy)) {
-            stepX = Math.sign(dx);
-        } else {
-            stepY = Math.sign(dy);
-        }
+        const tryMove = (stepX: number, stepY: number): boolean => {
+            if (stepX === 0 && stepY === 0) return false;
+            const nextX     = this.x + stepX * CHASER_SPEED * dt;
+            const nextY     = this.y + stepY * CHASER_SPEED * dt;
+            const nextGridX = Math.floor(nextX / TILE_SIZE);
+            const nextGridY = Math.floor(nextY / TILE_SIZE);
+            if (!level.isSolid(nextGridX, nextGridY)) {
+                this.x = nextX;
+                this.y = nextY;
+                return true;
+            }
+            return false;
+        };
 
-        const nextX = this.x + stepX * CHASER_SPEED * dt;
-        const nextY = this.y + stepY * CHASER_SPEED * dt;
-        const nextGridX = Math.floor(nextX / TILE_SIZE);
-        const nextGridY = Math.floor(nextY / TILE_SIZE);
-
-        if (!level.isSolid(nextGridX, nextGridY)) {
-            this.x = nextX;
-            this.y = nextY;
+        // Try primary axis first; slide along secondary if primary is blocked.
+        // This prevents the classic "stuck on corner" freeze where the preferred
+        // direction hits a wall tile but the orthogonal direction is clear.
+        if (!tryMove(primaryStepX, primaryStepY)) {
+            tryMove(slideStepX, slideStepY);
         }
     }
 }
@@ -330,7 +401,7 @@ Design goals:
 #.#.@....#.#
 #.#######..#
 #.......*..#
-#..########
+#..#########
 ############
 ```
 

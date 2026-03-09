@@ -1,6 +1,6 @@
 import { Entity } from './Entity';
 import { EntityType, Direction } from '../types';
-import { TILE_SIZE, PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_DURATION } from '../constants';
+import { TILE_SIZE, PLAYER_ATTACK_COOLDOWN, PLAYER_ATTACK_DURATION, PLAYER_MAX_HEALTH, INVINCIBILITY_DURATION } from '../constants';
 import { InputManager } from '../input/InputManager';
 import { LevelManager } from '../level/LevelManager';
 
@@ -10,6 +10,8 @@ export class Player extends Entity {
     public inAttackAnimation: boolean = false;
     public attackAnimationTimer: number = 0;
     public wantToAttack: boolean = false;
+    public health: number = PLAYER_MAX_HEALTH;
+    public invincibilityTimer: number = 0;
 
     // Abstract grid coords vs continuous pixel coords. 
     // Player x,y in Entity are absolute pixels, we snap it.
@@ -30,7 +32,21 @@ export class Player extends Entity {
         return Math.floor(this.y / TILE_SIZE);
     }
 
+    public isInvincible(): boolean {
+        return this.invincibilityTimer > 0;
+    }
+
+    public takeDamage(): void {
+        if (!this.isInvincible()) {
+            this.health -= 1;
+            this.invincibilityTimer = INVINCIBILITY_DURATION;
+        }
+    }
+
     public override update(dt: number): void {
+        // Update invincibility timer
+        this.invincibilityTimer = Math.max(0, this.invincibilityTimer - dt * 1000);
+
         // Update attack timers
         if (this.attackTimer > 0) {
             this.attackTimer -= dt * 1000;

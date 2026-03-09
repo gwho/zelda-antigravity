@@ -2,7 +2,7 @@ import { LevelManager } from '../level/LevelManager';
 import { Player } from '../entities/Player';
 import { Entity } from '../entities/Entity';
 import { TileType, Direction, EntityType, GameState } from '../types';
-import { TILE_SIZE, COLORS, CANVAS_WIDTH, CANVAS_HEIGHT } from '../constants';
+import { TILE_SIZE, COLORS, CANVAS_WIDTH, CANVAS_HEIGHT, PLAYER_MAX_HEALTH } from '../constants';
 
 export class Renderer {
     private ctx: CanvasRenderingContext2D;
@@ -38,7 +38,7 @@ export class Renderer {
             }
         }
 
-        this.renderHUD(score, levelNumber, enemies.length);
+        this.renderHUD(score, levelNumber, enemies.length, player);
 
         if (gameState === GameState.GAME_OVER) {
             this.renderOverlayMessage('GAME OVER', `Final Score: ${score}`, 'Press R to Restart');
@@ -122,6 +122,9 @@ export class Renderer {
 
     private renderPlayer(player: Player): void {
         this.ctx.save();
+        if (player.isInvincible()) {
+            this.ctx.globalAlpha = Math.floor(player.invincibilityTimer / 100) % 2 === 0 ? 0.3 : 1.0;
+        }
         this.ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
 
         // Rotate based on facing
@@ -206,14 +209,21 @@ export class Renderer {
         this.ctx.restore();
     }
 
-    private renderHUD(score: number, level: number, enemiesCount: number): void {
+    private renderHUD(score: number, level: number, enemiesCount: number, player: Player): void {
         this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.ctx.fillRect(0, 0, CANVAS_WIDTH, 40);
+
+        this.ctx.font = '18px Courier New';
+        this.ctx.textAlign = 'left';
+        for (let i = 0; i < PLAYER_MAX_HEALTH; i++) {
+            this.ctx.fillStyle = i < player.health ? '#E53935' : '#555';
+            this.ctx.fillText(i < player.health ? '♥' : '♡', 20 + i * 22, 27);
+        }
 
         this.ctx.fillStyle = COLORS.TEXT;
         this.ctx.font = '20px Courier New';
         this.ctx.textAlign = 'left';
-        this.ctx.fillText(`Level: ${level}`, 20, 27);
+        this.ctx.fillText(`Level: ${level}`, 100, 27);
 
         this.ctx.textAlign = 'center';
         this.ctx.fillText(`Score: ${score}`, CANVAS_WIDTH / 2, 27);
