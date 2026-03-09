@@ -19,15 +19,14 @@ export class CollisionSystem {
         );
     }
 
-    // Checks Player vs All Enemies for game over
+    // Checks Player vs All Enemies; applies damage with invincibility frames
     public static checkPlayerEnemyCollisions(player: Player, enemies: Entity[]): boolean {
-        // We add slight leniency so pixel perfect grazes don't feel unfair
-        // The bounds on Player/Enemies are already 0.8 * TILE_SIZE, which helps.
         for (const enemy of enemies) {
             if (this.checkOverlap(player, enemy)) {
-                return true; // Game Over triggered
+                player.takeDamage();
+                break;
             }
         }
-        return false;
+        return player.health <= 0;
     }
 }

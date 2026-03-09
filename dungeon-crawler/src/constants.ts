@@ -5,6 +5,10 @@ export const GRID_HEIGHT = 10;
 export const CANVAS_WIDTH = GRID_WIDTH * TILE_SIZE;
 export const CANVAS_HEIGHT = GRID_HEIGHT * TILE_SIZE;
 
+// Health
+export const PLAYER_MAX_HEALTH = 3;
+export const INVINCIBILITY_DURATION = 1500; // ms
+
 // Speeds
 export const PLAYER_ATTACK_COOLDOWN = 300; // ms
 export const PLAYER_ATTACK_DURATION = 500; // ms
