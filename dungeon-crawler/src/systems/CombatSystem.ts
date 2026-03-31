@@ -1,49 +1,49 @@
-import { Player } from '../entities/Player';
-import { Entity } from '../entities/Entity';
+import { World } from '../ecs/World';
+import type { Position, Size, PlayerInput, AttackIntent, Health } from '../ecs/Components';
 import { Direction } from '../types';
 import { TILE_SIZE } from '../constants';
+import { CollisionSystem } from './CollisionSystem';
 
 export class CombatSystem {
 
-    public static processAttacks(player: Player, enemies: Entity[], handleKill: (enemy: Entity) => void): void {
-        if (player.wantToAttack) {
-            player.wantToAttack = false;
+    public static processAttacks(world: World, handleKill: (entity: number) => void): void {
+        const players = world.getEntitiesWith('PlayerInput', 'AttackIntent', 'Position');
+        const hittable = world.getEntitiesWith('Health', 'Position', 'Size');
 
-            // Attack hits the tile exactly 1 grid space in front of the player's facing direction
-            let targetGridX = player.getGridX();
-            let targetGridY = player.getGridY();
+        for (const pEntity of players) {
+            const intent = world.getComponent<AttackIntent>(pEntity, 'AttackIntent')!;
+            if (!intent.wantToAttack) continue;
+            
+            intent.wantToAttack = false;
 
-            switch (player.facing) {
+            const pPos = world.getComponent<Position>(pEntity, 'Position')!;
+            const pInput = world.getComponent<PlayerInput>(pEntity, 'PlayerInput')!;
+
+            let targetGridX = Math.floor(pPos.x / TILE_SIZE);
+            let targetGridY = Math.floor(pPos.y / TILE_SIZE);
+
+            switch (pInput.facing) {
                 case Direction.UP: targetGridY -= 1; break;
                 case Direction.DOWN: targetGridY += 1; break;
                 case Direction.LEFT: targetGridX -= 1; break;
                 case Direction.RIGHT: targetGridX += 1; break;
             }
 
-            // Create a pseudo-entity representing the bounds of the attack to check overlap
-            // We use a small rectangle centered on that tile
-            const attackBounds = {
-                left: targetGridX * TILE_SIZE + TILE_SIZE * 0.1,
-                right: targetGridX * TILE_SIZE + TILE_SIZE * 0.9,
-                top: targetGridY * TILE_SIZE + TILE_SIZE * 0.1,
-                bottom: targetGridY * TILE_SIZE + TILE_SIZE * 0.9
-            };
+            const attackPos: Position = { x: targetGridX * TILE_SIZE + TILE_SIZE * 0.1, y: targetGridY * TILE_SIZE + TILE_SIZE * 0.1 };
+            const attackSize: Size = { width: TILE_SIZE * 0.8, height: TILE_SIZE * 0.8 };
 
-            for (const enemy of enemies) {
-                if (!enemy.isActive) continue;
+            for (const hEntity of hittable) {
+                if (pEntity === hEntity) continue; // don't hit yourself
 
-                const eb = enemy.getBounds();
+                const hPos = world.getComponent<Position>(hEntity, 'Position')!;
+                const hSize = world.getComponent<Size>(hEntity, 'Size')!;
+                const hHealth = world.getComponent<Health>(hEntity, 'Health')!;
 
-                // Check overlap between attackBounds and enemy bounds
-                const overlaps = (
-                    attackBounds.left < eb.right &&
-                    attackBounds.right > eb.left &&
-                    attackBounds.top < eb.bottom &&
-                    attackBounds.bottom > eb.top
-                );
-
-                if (overlaps) {
-                    handleKill(enemy);
+                if (CollisionSystem.checkOverlap(attackPos, attackSize, hPos, hSize)) {
+                    hHealth.current -= 1;
+                    if (hHealth.current <= 0) {
+                        handleKill(hEntity);
+                    }
                 }
             }
         }
