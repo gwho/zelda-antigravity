@@ -1,13 +1,14 @@
 import { LevelManager } from '../level/LevelManager';
-import { Player } from '../entities/Player';
-import { Entity } from '../entities/Entity';
 import { TileType, Direction, EntityType, GameState } from '../types';
 import { TILE_SIZE, COLORS, CANVAS_WIDTH, CANVAS_HEIGHT, PLAYER_MAX_HEALTH } from '../constants';
+import { World } from '../ecs/World';
+import type { Position, Size, PlayerInput, AttackIntent, Health, Renderable } from '../ecs/Components';
 
 export class Renderer {
     private ctx: CanvasRenderingContext2D;
 
     constructor(canvas: HTMLCanvasElement) {
+        // ... previous setup ...
         canvas.width = CANVAS_WIDTH;
         canvas.height = CANVAS_HEIGHT;
         this.ctx = canvas.getContext('2d') as CanvasRenderingContext2D;
@@ -16,8 +17,7 @@ export class Renderer {
     public render(
         gameState: GameState,
         levelManager: LevelManager,
-        player: Player,
-        enemies: Entity[],
+        world: World,
         score: number,
         levelNumber: number
     ): void {
@@ -29,21 +29,37 @@ export class Renderer {
         }
 
         this.renderLevel(levelManager);
-        this.renderEnemies(enemies);
+        
+        const renderables = world.getEntitiesWith('Renderable', 'Position', 'Size');
+        renderables.sort((a, b) => {
+            const zA = world.getComponent<Renderable>(a, 'Renderable')!.zIndex;
+            const zB = world.getComponent<Renderable>(b, 'Renderable')!.zIndex;
+            return zA - zB;
+        });
 
-        if (gameState === GameState.PLAYING) {
-            this.renderPlayer(player);
-            if (player.inAttackAnimation) {
-                this.renderAttack(player);
+        for (const e of renderables) {
+            const renderable = world.getComponent<Renderable>(e, 'Renderable')!;
+            if (renderable.type === EntityType.PLAYER) {
+                this.renderPlayer(world, e);
+                const attack = world.getComponent<AttackIntent>(e, 'AttackIntent');
+                if (attack && attack.inAnim) {
+                    this.renderAttack(world, e, attack);
+                }
+            } else if (renderable.type === EntityType.ENEMY_PATROL || renderable.type === EntityType.ENEMY_WANDER) {
+                this.renderEnemy(world, e, renderable.type);
             }
         }
 
-        this.renderHUD(score, levelNumber, enemies.length, player);
+        const players = world.getEntitiesWith('PlayerInput', 'Health');
+        const enemiesCount = world.getEntitiesWith('AI').length;
+        if (players.length > 0) {
+            this.renderHUD(score, levelNumber, enemiesCount, world, players[0]);
+        }
 
         if (gameState === GameState.GAME_OVER) {
-            this.renderOverlayMessage('GAME OVER', `Final Score: ${score}`, 'Press R to Restart');
+            this.renderOverlayMessage('GAME OVER', `Final Score: ${score}`, 'Press SPACE to Restart');
         } else if (gameState === GameState.VICTORY) {
-            this.renderOverlayMessage('YOU WIN!', `Final Score: ${score}`, 'Press R to Play Again');
+            this.renderOverlayMessage('YOU WIN!', `Final Score: ${score}`, 'Press SPACE to Play Again');
         }
     }
 
@@ -60,11 +76,9 @@ export class Renderer {
         const px = x * TILE_SIZE;
         const py = y * TILE_SIZE;
 
-        // Base floor
         this.ctx.fillStyle = COLORS.FLOOR;
         this.ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
 
-        // Grid lines for retro feel
         this.ctx.strokeStyle = 'rgba(0,0,0,0.1)';
         this.ctx.strokeRect(px, py, TILE_SIZE, TILE_SIZE);
 
@@ -82,7 +96,6 @@ export class Renderer {
             case TileType.EMPTY:
                 this.ctx.fillStyle = COLORS.WALL;
                 this.ctx.fillRect(px, py, TILE_SIZE, TILE_SIZE);
-                // Bevel effect
                 this.ctx.fillStyle = 'rgba(255,255,255,0.1)';
                 this.ctx.fillRect(px, py, TILE_SIZE, 4);
                 this.ctx.fillRect(px, py, 4, TILE_SIZE);
@@ -105,7 +118,6 @@ export class Renderer {
                 this.ctx.arc(px + TILE_SIZE / 2, py + TILE_SIZE / 2, TILE_SIZE * 0.4, 0, Math.PI * 2);
                 this.ctx.fill();
 
-                // Glow effect for visual polish
                 if (type === TileType.LANTERN) {
                     this.ctx.shadowBlur = 15;
                     this.ctx.shadowColor = '#FF9800';
@@ -120,16 +132,20 @@ export class Renderer {
         this.ctx.restore();
     }
 
-    private renderPlayer(player: Player): void {
-        this.ctx.save();
-        if (player.isInvincible()) {
-            this.ctx.globalAlpha = Math.floor(player.invincibilityTimer / 100) % 2 === 0 ? 0.3 : 1.0;
-        }
-        this.ctx.translate(player.x + player.width / 2, player.y + player.height / 2);
+    private renderPlayer(world: World, entity: number): void {
+        const pos = world.getComponent<Position>(entity, 'Position')!;
+        const size = world.getComponent<Size>(entity, 'Size')!;
+        const input = world.getComponent<PlayerInput>(entity, 'PlayerInput')!;
+        const health = world.getComponent<Health>(entity, 'Health')!;
 
-        // Rotate based on facing
+        this.ctx.save();
+        if (health && health.invincibilityTimer > 0) {
+            this.ctx.globalAlpha = Math.floor(health.invincibilityTimer / 100) % 2 === 0 ? 0.3 : 1.0;
+        }
+        this.ctx.translate(pos.x + size.width / 2, pos.y + size.height / 2);
+
         let angle = 0;
-        switch (player.facing) {
+        switch (input.facing) {
             case Direction.UP: angle = -Math.PI / 2; break;
             case Direction.DOWN: angle = Math.PI / 2; break;
             case Direction.LEFT: angle = Math.PI; break;
@@ -137,45 +153,43 @@ export class Renderer {
         }
         this.ctx.rotate(angle);
 
-        // Body
         this.ctx.fillStyle = COLORS.PLAYER;
-        this.ctx.fillRect(-player.width / 2, -player.height / 2, player.width, player.height);
+        this.ctx.fillRect(-size.width / 2, -size.height / 2, size.width, size.height);
 
-        // Facing indicator (little nose/sword hint)
         this.ctx.fillStyle = '#FFF';
         this.ctx.beginPath();
-        this.ctx.moveTo(player.width / 2, -player.height / 4);
-        this.ctx.lineTo(player.width / 2 + 10, 0);
-        this.ctx.lineTo(player.width / 2, player.height / 4);
+        this.ctx.moveTo(size.width / 2, -size.height / 4);
+        this.ctx.lineTo(size.width / 2 + 10, 0);
+        this.ctx.lineTo(size.width / 2, size.height / 4);
         this.ctx.fill();
 
         this.ctx.restore();
     }
 
-    private renderEnemies(enemies: Entity[]): void {
-        for (const enemy of enemies) {
-            if (!enemy.isActive) continue;
+    private renderEnemy(world: World, entity: number, type: EntityType): void {
+        const pos = world.getComponent<Position>(entity, 'Position')!;
+        const size = world.getComponent<Size>(entity, 'Size')!;
 
-            this.ctx.fillStyle = enemy.type === EntityType.ENEMY_PATROL ? COLORS.PATROL_ENEMY : COLORS.WANDER_ENEMY;
-            this.ctx.fillRect(enemy.x, enemy.y, enemy.width, enemy.height);
+        this.ctx.fillStyle = type === EntityType.ENEMY_PATROL ? COLORS.PATROL_ENEMY : COLORS.WANDER_ENEMY;
+        this.ctx.fillRect(pos.x, pos.y, size.width, size.height);
 
-            // Eyes
-            this.ctx.fillStyle = '#FFF';
-            this.ctx.fillRect(enemy.x + 4, enemy.y + 8, 8, 8);
-            this.ctx.fillRect(enemy.x + enemy.width - 12, enemy.y + 8, 8, 8);
-            this.ctx.fillStyle = '#000';
-            this.ctx.fillRect(enemy.x + 6, enemy.y + 10, 4, 4);
-            this.ctx.fillRect(enemy.x + enemy.width - 10, enemy.y + 10, 4, 4);
-        }
+        this.ctx.fillStyle = '#FFF';
+        this.ctx.fillRect(pos.x + 4, pos.y + 8, 8, 8);
+        this.ctx.fillRect(pos.x + size.width - 12, pos.y + 8, 8, 8);
+        this.ctx.fillStyle = '#000';
+        this.ctx.fillRect(pos.x + 6, pos.y + 10, 4, 4);
+        this.ctx.fillRect(pos.x + size.width - 10, pos.y + 10, 4, 4);
     }
 
-    private renderAttack(player: Player): void {
-        // Visual polish: scale/fade 'kaboom'
-        const progress = 1 - (player.attackAnimationTimer / 500); // 0 to 1
+    private renderAttack(world: World, entity: number, attack: AttackIntent): void {
+        const pos = world.getComponent<Position>(entity, 'Position')!;
+        const input = world.getComponent<PlayerInput>(entity, 'PlayerInput')!;
 
-        let tx = player.getGridX();
-        let ty = player.getGridY();
-        switch (player.facing) {
+        const progress = 1 - (attack.animTimer / 500); 
+
+        let tx = Math.floor((pos.x + TILE_SIZE * 0.4) / TILE_SIZE);
+        let ty = Math.floor((pos.y + TILE_SIZE * 0.4) / TILE_SIZE);
+        switch (input.facing) {
             case Direction.UP: ty -= 1; break;
             case Direction.DOWN: ty += 1; break;
             case Direction.LEFT: tx -= 1; break;
@@ -196,7 +210,6 @@ export class Renderer {
         this.ctx.shadowBlur = 20;
         this.ctx.shadowColor = COLORS.ATTACK;
 
-        // Spiky star shape
         this.ctx.beginPath();
         for (let i = 0; i < 8; i++) {
             this.ctx.rotate(Math.PI / 4);
@@ -209,15 +222,17 @@ export class Renderer {
         this.ctx.restore();
     }
 
-    private renderHUD(score: number, level: number, enemiesCount: number, player: Player): void {
+    private renderHUD(score: number, level: number, enemiesCount: number, world: World, playerEntity: number): void {
+        const health = world.getComponent<Health>(playerEntity, 'Health')!;
+
         this.ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
         this.ctx.fillRect(0, 0, CANVAS_WIDTH, 40);
 
         this.ctx.font = '18px Courier New';
         this.ctx.textAlign = 'left';
         for (let i = 0; i < PLAYER_MAX_HEALTH; i++) {
-            this.ctx.fillStyle = i < player.health ? '#E53935' : '#555';
-            this.ctx.fillText(i < player.health ? '♥' : '♡', 20 + i * 22, 27);
+            this.ctx.fillStyle = i < health.current ? '#E53935' : '#555';
+            this.ctx.fillText(i < health.current ? '♥' : '♡', 20 + i * 22, 27);
         }
 
         this.ctx.fillStyle = COLORS.TEXT;

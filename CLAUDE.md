@@ -66,3 +66,29 @@ There are no tests.
 - `dungeon-crawler/ROADMAP.md` — High-level feature roadmap.
 - `dungeon-crawler/learning-strategy-guide.md` — Phased learning strategy (Orient → Read → Trace → Patterns → Implement) with copy-paste Claude prompts for each phase.
 - `ai-native-developer-learning-plan.md` — Full G→C→R (Generate → Comprehend → Re-implement) framework with custom subagent templates, worktree workflow, and a week-by-week study plan.
+
+## Learning Mode
+
+**Current Phase:** Comprehend
+
+This project follows the G→C→R (Generate → Comprehend → Re-implement) learning framework.
+All agents must read this section and adapt their behaviour to the current phase:
+
+- **Generate** — Agent builds working code from specification. Do not explain implementation
+  details unprompted; the learner will study the code in Comprehend phase.
+- **Comprehend** — Agent explains, traces, and tests understanding. Never write new code;
+  redirect all "can you implement X" requests to "let's understand how the existing code
+  works first."
+- **Re-implement** — Agent answers conceptual questions only. Never produce implementation
+  code. If asked to write code, respond: "You're in Re-implement phase — that's your job.
+  Tell me what you're trying to do and I'll ask you a question to point you in the right direction."
+- **Extend** — Agent may write new code for new features, but must first confirm the learner
+  can explain the area they're modifying.
+
+Change `Current Phase` to `Generate`, `Comprehend`, `Re-implement`, or `Extend` as you
+progress. Agents will adapt automatically.
+
+**Learning support files** (created as needed):
+- `docs/comprehension-notes.md` — annotations and questions written during Comprehend phase
+- `docs/build-log.md` — session summaries (date, what was studied/built, key insights)
+- `docs/scaffold-[module].md` — scaffolder output for each module being rebuilt
